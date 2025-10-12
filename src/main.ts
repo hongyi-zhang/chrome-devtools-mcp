@@ -12,8 +12,9 @@ import path from 'node:path';
 
 import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
-import type {CallToolResult} from '@modelcontextprotocol/sdk/types.js';
-import {SetLevelRequestSchema} from '@modelcontextprotocol/sdk/types.js';
+// Avoid tight coupling to SDK types that may change
+type CallToolResult = {content: any; isError?: boolean};
+const SetLevelRequestSchema: any = (await import('@modelcontextprotocol/sdk/types.js')).SetLevelRequestSchema;
 
 import type {Channel} from './browser.js';
 import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
@@ -32,6 +33,7 @@ import * as screenshotTools from './tools/screenshot.js';
 import * as scriptTools from './tools/script.js';
 import * as snapshotTools from './tools/snapshot.js';
 import type {ToolDefinition} from './tools/ToolDefinition.js';
+import {withActionTracing} from './tracing/InstrumentInputTools.js';
 
 function readPackageJson(): {version?: string} {
   const currentDir = import.meta.dirname;
@@ -160,7 +162,8 @@ function registerTool(tool: ToolDefinition): void {
 const tools = [
   ...Object.values(consoleTools),
   ...Object.values(emulationTools),
-  ...Object.values(inputTools),
+  // Wrap input automation tools with tracing
+  ...Object.values(inputTools).map(t => withActionTracing(t as unknown as ToolDefinition)),
   ...Object.values(networkTools),
   ...Object.values(pagesTools),
   ...Object.values(performanceTools),

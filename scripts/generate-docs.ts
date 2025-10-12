@@ -10,8 +10,9 @@ import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 import type {Tool} from '@modelcontextprotocol/sdk/types.js';
 
-import {cliOptions} from '../build/src/cli.js';
-import {ToolCategories} from '../build/src/tools/categories.js';
+// Defer to runtime-only; avoid TS type coupling on build outputs.
+const {cliOptions} = await import('../build/src/cli.js');
+const {ToolCategories} = await import('../build/src/tools/categories.js');
 
 const MCP_SERVER_PATH = 'build/src/index.js';
 const OUTPUT_PATH = './docs/tool-reference.md';
@@ -107,30 +108,30 @@ function updateReadmeWithToolsTOC(toolsTOC: string): void {
 function generateConfigOptionsMarkdown(): string {
   let markdown = '';
 
-  for (const [optionName, optionConfig] of Object.entries(cliOptions)) {
+  for (const [optionName, optionConfig] of Object.entries<any>(cliOptions as any)) {
     // Skip hidden options
     if (optionConfig.hidden) {
       continue;
     }
 
-    const aliasText = optionConfig.alias ? `, \`-${optionConfig.alias}\`` : '';
-    const description = optionConfig.description || optionConfig.describe || '';
+    const aliasText = (optionConfig as any).alias ? `, \`-${(optionConfig as any).alias}\`` : '';
+    const description = (optionConfig as any).description || (optionConfig as any).describe || '';
 
     // Start with option name and description
     markdown += `- **\`--${optionName}\`${aliasText}**\n`;
     markdown += `  ${description}\n`;
 
     // Add type information
-    markdown += `  - **Type:** ${optionConfig.type}\n`;
+    markdown += `  - **Type:** ${(optionConfig as any).type}\n`;
 
     // Add choices if available
-    if (optionConfig.choices) {
-      markdown += `  - **Choices:** ${optionConfig.choices.map(c => `\`${c}\``).join(', ')}\n`;
+    if ((optionConfig as any).choices) {
+      markdown += `  - **Choices:** ${(optionConfig as any).choices.map((c: any) => `\`${c}\``).join(', ')}\n`;
     }
 
     // Add default if available
-    if (optionConfig.default !== undefined) {
-      markdown += `  - **Default:** \`${optionConfig.default}\`\n`;
+    if ((optionConfig as any).default !== undefined) {
+      markdown += `  - **Default:** \`${(optionConfig as any).default}\`\n`;
     }
 
     markdown += '\n';
@@ -266,14 +267,14 @@ async function generateToolDocumentation(): Promise<void> {
           tool.inputSchema.properties &&
           Object.keys(tool.inputSchema.properties).length > 0
         ) {
-          const properties = tool.inputSchema.properties;
+          const properties: any = (tool as any).inputSchema.properties;
           const required = tool.inputSchema.required || [];
 
           markdown += '**Parameters:**\n\n';
 
           const propertyNames = Object.keys(properties).sort();
           for (const propName of propertyNames) {
-            const prop = properties[propName] as string;
+            const prop = properties[propName] as any;
             const isRequired = required.includes(propName);
             const requiredText = isRequired
               ? ' **(required)**'
@@ -281,7 +282,7 @@ async function generateToolDocumentation(): Promise<void> {
 
             let typeInfo = prop.type || 'unknown';
             if (prop.enum) {
-              typeInfo = `enum: ${prop.enum.map(v => `"${v}"`).join(', ')}`;
+              typeInfo = `enum: ${prop.enum.map((v: any) => `"${v}"`).join(', ')}`;
             }
 
             markdown += `- **${propName}** (${typeInfo})${requiredText}`;

@@ -1,0 +1,13 @@
+{
+  "version": "v1",
+  "steps": [
+    {
+      "kind": "click",
+      "selectors": {
+        "css": "#login"
+      },
+      "confidence": 0.9
+    }
+  ]
+}
+
