@@ -22,7 +22,7 @@
     "prepare": "node --experimental-strip-types scripts/prepare.ts",
     "sync-server-json-version": "node  --experimental-strip-types scripts/sync-server-json-version.ts && npm run format",
     "trace:post": "node build/scripts/postprocess-trace.js --in ./.mcp-traces/latest.ndjson --out ./examples/replay-out.json",
-    "e2e:llm": "node build/scripts/e2e-llm.js"
+    "e2e:llm": "node --experimental-strip-types scripts/e2e-llm.ts"
   },
   "files": [
     "build/src",
@@ -57,6 +57,7 @@
     "@typescript-eslint/eslint-plugin": "^8.43.0",
     "@typescript-eslint/parser": "^8.43.0",
     "chrome-devtools-frontend": "1.0.1524741",
+    "dotenv": "^17.2.3",
     "eslint": "^9.35.0",
     "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-import": "^2.32.0",
