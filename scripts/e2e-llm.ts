@@ -38,17 +38,23 @@ async function listMcpTools(): Promise<Tool[]> {
   return tools;
 }
 
-function buildToolPrompt(tools: Tool[]): string {
-  const lines: string[] = [];
-  lines.push('You are helping to generate a short plan of MCP tool calls.');
-  lines.push('Here are the available tools:');
-  for (const t of tools) {
-    lines.push(`- ${t.name}: ${t.description ?? ''}`);
-  }
-  lines.push('Respond with a small JSON object of the shape:');
-  lines.push('{ steps: [{ tool: string, params: object }] }');
-  lines.push('Only include tools needed to open a page and prepare for interaction (e.g., navigate_page, take_snapshot).');
-  return lines.join('\n');
+function convertMcpToolsToOpenAiTools(mcpTools: Tool[]): any[] {
+  // Convert MCP tool definitions to OpenAI Chat Completions tools format
+  return mcpTools.map((t: any) => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description ?? '',
+      parameters: t.input_schema ?? {type: 'object', properties: {}}
+    }
+  }));
+}
+
+function buildShoppingSystemPrompt(): string {
+  return [
+    'You are a precise web automation agent. You can only act by calling the provided tools.',
+    'Goal: Add one 5 lb bag of Cosmic Shift Seasonal Espresso to the cart on Ritual Coffee.'
+  ].join('\n');
 }
 
 async function main() {
@@ -65,9 +71,10 @@ async function main() {
     defaultQuery: {'api-version': apiVersion},
   } as any);
 
-  const tools = await listMcpTools();
-  const system = buildToolPrompt(tools);
-  const user = `Target URL: https://example.com. Propose the minimal steps.`;
+  const mcpTools = await listMcpTools();
+  const tools = convertMcpToolsToOpenAiTools(mcpTools);
+  const system = buildShoppingSystemPrompt();
+  const user = 'Go to https://ritualcoffee.com/shop/coffee/cosmic-shift-seasonal-espresso/ and add one bag of 5lb coffee to the cart.';
 
     // Use Chat Completions for broad compatibility (OpenAI & Azure OpenAI)
     const completion = await client.chat.completions.create({
@@ -76,8 +83,9 @@ async function main() {
         {role: 'system', content: system},
         {role: 'user', content: user},
       ],
-      temperature: 0.2,
-      response_format: {type: 'json_object'},
+      tools,
+      tool_choice: 'auto',
+      max_tokens: 1000,
     });
 
   const content = completion.choices[0]?.message?.content ?? '';
