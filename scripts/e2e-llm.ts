@@ -30,7 +30,7 @@ function optionalEnv(name: string): string | undefined {
 }
 
 async function listMcpTools(): Promise<Tool[]> {
-  const transport = new StdioClientTransport({command: 'node', args: [MCP_SERVER_PATH]});
+  const transport = new StdioClientTransport({command: 'node', args: [MCP_SERVER_PATH, '--isolated']});
   const client = new McpClient({name: 'e2e-llm', version: '1.0.0'}, {capabilities: {}});
   await client.connect(transport);
   const {tools} = await client.listTools();
@@ -45,7 +45,7 @@ function convertMcpToolsToOpenAiTools(mcpTools: Tool[]): any[] {
     function: {
       name: t.name,
       description: t.description ?? '',
-      parameters: t.input_schema ?? {type: 'object', properties: {}}
+      parameters: t.inputSchema ?? {type: 'object', properties: {}}
     }
   }));
 }
@@ -105,7 +105,7 @@ async function main() {
   const user = 'Go to https://ritualcoffee.com/shop/coffee/cosmic-shift-seasonal-espresso/ and add one bag of 5lb coffee to the cart.';
 
   // Create a persistent MCP client for the agent loop
-  const transport = new StdioClientTransport({command: 'node', args: [MCP_SERVER_PATH]});
+  const transport = new StdioClientTransport({command: 'node', args: [MCP_SERVER_PATH, '--isolated']});
   const mcpClient = new McpClient({name: 'e2e-llm', version: '1.0.0'}, {capabilities: {}});
   await mcpClient.connect(transport);
 
