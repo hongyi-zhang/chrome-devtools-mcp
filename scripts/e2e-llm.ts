@@ -10,6 +10,9 @@ declare const process: any;
 // Node process is available globally; avoid importing type to satisfy linter.
 
 import OpenAI from 'openai';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 import {Client as McpClient} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 import type {Tool} from '@modelcontextprotocol/sdk/types.js';
@@ -85,6 +88,81 @@ function buildShoppingSystemPrompt(): string {
   ].join('\n');
 }
 
+function ensureTracingEnvAndDir(): string {
+  if (process.env['MCP_TRACING_ENABLED'] == null) {
+    process.env['MCP_TRACING_ENABLED'] = 'true';
+  }
+  let dir = process.env['MCP_TRACE_DIR'];
+  if (!dir) {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    dir = path.join(process.cwd(), `.mcp-traces-${suffix}`);
+    process.env['MCP_TRACE_DIR'] = dir;
+  }
+  return dir;
+}
+
+async function startTracePrinter(traceDir: string): Promise<() => void> {
+  try {
+    await fsp.mkdir(traceDir, {recursive: true});
+  } catch {}
+  const filePositions = new Map<string, number>();
+
+  async function readNew(fullPath: string): Promise<void> {
+    try {
+      const stats = await fsp.stat(fullPath);
+      const prev = filePositions.get(fullPath) ?? 0;
+      if (stats.size <= prev) return;
+      const fh = await fsp.open(fullPath, 'r');
+      const toRead = stats.size - prev;
+      const buffer = Buffer.alloc(toRead);
+      await fh.read(buffer, 0, toRead, prev);
+      await fh.close();
+      filePositions.set(fullPath, stats.size);
+      const text = buffer.toString('utf-8');
+      const lines = text.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const obj = JSON.parse(trimmed);
+          // eslint-disable-next-line no-console
+          console.log('TRACE', obj);
+        } catch {
+          // eslint-disable-next-line no-console
+          console.log('TRACE', trimmed);
+        }
+      }
+    } catch {}
+  }
+
+  try {
+    const existing = await fsp.readdir(traceDir);
+    for (const name of existing) {
+      if (!name.endsWith('.ndjson')) continue;
+      const full = path.join(traceDir, name);
+      try {
+        const stats = await fsp.stat(full);
+        filePositions.set(full, stats.size);
+      } catch {}
+    }
+  } catch {}
+
+  const watcher = fs.watch(traceDir, {persistent: false}, (event, filename) => {
+    if (!filename || !filename.endsWith('.ndjson')) return;
+    const full = path.join(traceDir, filename);
+    if (event === 'rename' && !filePositions.has(full)) {
+      filePositions.set(full, 0);
+    }
+    void readNew(full);
+  });
+
+  return () => {
+    try {
+      watcher.close();
+    } catch {}
+  };
+}
+
 async function main() {
   // Require user config
   const apiKey = requireEnv('OPENAI_API_KEY');
@@ -105,6 +183,8 @@ async function main() {
   const user = 'Go to https://ritualcoffee.com/shop/coffee/cosmic-shift-seasonal-espresso/ and add one bag of 5lb coffee to the cart.';
 
   // Create a persistent MCP client for the agent loop
+  const traceDir = ensureTracingEnvAndDir();
+  const stopTracePrinter = await startTracePrinter(traceDir);
   const transport = new StdioClientTransport({command: 'node', args: [MCP_SERVER_PATH, '--isolated']});
   const mcpClient = new McpClient({name: 'e2e-llm', version: '1.0.0'}, {capabilities: {}});
   await mcpClient.connect(transport);
@@ -122,12 +202,14 @@ async function main() {
         messages,
         tools,
         tool_choice: 'auto',
-        max_tokens: 1000,
+        max_tokens: 8192,
       } as any);
 
       const choice = completion.choices[0];
       const msg: any = choice?.message ?? {};
       const finish = choice?.finish_reason;
+      // Log finish reason
+      console.log('Finish reason:', finish);
 
       // If assistant produced text, print it and add to history
       if (msg?.content && typeof msg.content === 'string' && msg.content.length) {
@@ -141,6 +223,8 @@ async function main() {
       };
       if (Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0) {
         assistantForHistory.tool_calls = msg.tool_calls;
+        // Log the tool calls
+        console.log('Tool calls:', msg.tool_calls);
       }
       messages.push(assistantForHistory);
 
@@ -181,6 +265,7 @@ async function main() {
     }
   } finally {
     await mcpClient.close();
+    stopTracePrinter();
   }
 }
 
