@@ -98,7 +98,7 @@ async function main() {
     try { (0, eval)(src); } catch {}
   }, runtime);
   // Navigate to start URL, then inject for the current document
-  await page.goto(startUrl, {waitUntil: 'domcontentloaded'});
+  await page.goto(startUrl, {waitUntil: 'load'});
   await page.addScriptTag({content: runtime});
 
   const stepTimeoutMs = args.stepTimeoutMs ?? 8000;
@@ -124,7 +124,7 @@ async function main() {
     await ensureRuntime();
     let navHappened = false;
     const waitNav = page
-      .waitForNavigation({waitUntil: 'domcontentloaded', timeout: stepTimeoutMs})
+      .waitForNavigation({waitUntil: 'load', timeout: stepTimeoutMs})
       .then(() => {
         navHappened = true;
       })
@@ -172,6 +172,71 @@ async function main() {
   }
   // eslint-disable-next-line no-console
   console.log(`Summary: ${okCount}/${results.length} steps succeeded.`);
+  // Attempt to settle the page before taking the final screenshot
+  try {
+    // 1) Ensure load complete (SPA may already be loaded; this is best-effort)
+    try {
+      await page.waitForFunction(() => document.readyState === 'complete', {timeout: 3000});
+    } catch {}
+    // 2) Wait for network to be idle briefly
+    try {
+      await page.waitForNetworkIdle({idleTime: 800, timeout: 5000} as any);
+    } catch {}
+    // 3) Wait for fonts to be ready (if supported)
+    try {
+      await page.evaluate(async () => {
+        try {
+          // @ts-ignore
+          if (document.fonts && document.fonts.ready) { await (document.fonts as any).ready; }
+        } catch {}
+      });
+    } catch {}
+    // 4) Observe DOM for a quiet window (few hundred ms without mutations)
+    try {
+      await page.evaluate((quietMs: number, timeoutMs: number) => {
+        return new Promise<void>(resolve => {
+          let done = false;
+          let quietTimer: any;
+          const timeout = setTimeout(() => { if (!done) { done = true; obs.disconnect(); resolve(); } }, timeoutMs);
+          const finish = () => { if (!done) { done = true; clearTimeout(timeout); obs.disconnect(); resolve(); } };
+          const obs = new MutationObserver(() => {
+            clearTimeout(quietTimer);
+            quietTimer = setTimeout(finish, quietMs);
+          });
+          try { obs.observe(document, {subtree: true, childList: true, attributes: true, characterData: true}); } catch {}
+          quietTimer = setTimeout(finish, quietMs);
+        });
+      }, 600, 4000);
+    } catch {}
+    // 5) Progressive scroll to trigger lazy content, then return to top
+    try {
+      await page.evaluate(() => {
+        return new Promise<void>(resolve => {
+          const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+          (async () => {
+            const step = Math.max(200, Math.floor(window.innerHeight * 0.8));
+            const max = Math.max(
+              document.documentElement ? document.documentElement.scrollHeight : 0,
+              document.body ? document.body.scrollHeight : 0,
+            );
+            let y = 0;
+            while (y < max) {
+              window.scrollTo(0, y);
+              // Give intersection observers time to load
+              // @ts-ignore
+              await delay(80);
+              y += step;
+            }
+            window.scrollTo(0, 0);
+            // Small delay to settle layout at top
+            // @ts-ignore
+            await delay(80);
+            resolve();
+          })();
+        });
+      });
+    } catch {}
+  } catch {}
   // Take a final screenshot for inspection before closing
   try {
     const targetPath = args.screenshot ? path.resolve(args.screenshot) : path.resolve('examples/replay-final.png');
