@@ -14,7 +14,6 @@ import {buildSelectorBundle} from './SelectorUtils.js';
 import type {TraceContractV1} from './TraceTypes.js';
 import {NetworkTap} from './NetworkTap.js';
 import {TraceWriter} from './TraceWriter.js';
-import {redactKV} from './Redaction.js';
 import {ToolCategories} from '../tools/categories.js';
 import z from 'zod';
 
@@ -101,7 +100,7 @@ export function withActionTracing<Schema extends z.ZodRawShape>(
             screenshots,
             network,
           };
-          await sessionWriter.write(redactKV(record));
+          await sessionWriter.write(record);
         } catch (err) {
           logger(`trace write failed: ${(err as Error).message}`);
         }
