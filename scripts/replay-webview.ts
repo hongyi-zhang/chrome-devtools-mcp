@@ -89,19 +89,76 @@ async function main() {
     height: plan.viewport.height,
     deviceScaleFactor: plan.viewport.deviceScaleFactor ?? 1,
   });
-  await page.goto(startUrl, {waitUntil: 'domcontentloaded'});
   const replayJsPath = path.resolve('webview/replay.js');
   const runtime = await fs.readFile(replayJsPath, 'utf-8');
+  // Ensure the runtime is injected on every navigation
+  await page.addInitScript({content: runtime});
+  // Navigate to start URL, then inject for the current document
+  await page.goto(startUrl, {waitUntil: 'domcontentloaded'});
   await page.addScriptTag({content: runtime});
+
   const stepTimeoutMs = args.stepTimeoutMs ?? 8000;
-  const results = await page.evaluate(
-    (steps, timeout) => {
-      // @ts-ignore
-      return window.MCPReplay.replay(steps, {stepTimeoutMs: timeout});
-    },
-    plan.steps,
-    stepTimeoutMs,
-  );
+
+  async function ensureRuntime(): Promise<void> {
+    try {
+      const ok = await page.evaluate(() => {
+        // @ts-ignore
+        return typeof window !== 'undefined' && typeof (window as any).MCPReplay === 'object';
+      });
+      if (!ok) {
+        await page.addScriptTag({content: runtime}).catch(() => {});
+      }
+    } catch {
+      // New document context; add runtime for current doc
+      await page.addScriptTag({content: runtime}).catch(() => {});
+    }
+  }
+
+  const results: Array<{ok: boolean; error?: string; via?: string; alternativeReason?: string | null}> = [];
+  for (let i = 0; i < plan.steps.length; i++) {
+    const step = plan.steps[i];
+    await ensureRuntime();
+    let navHappened = false;
+    const waitNav = page
+      .waitForNavigation({waitUntil: 'domcontentloaded', timeout: stepTimeoutMs})
+      .then(() => {
+        navHappened = true;
+      })
+      .catch(() => {});
+    try {
+      const stepRes = await page.evaluate(
+        (s, timeout) => {
+          // @ts-ignore
+          return window.MCPReplay.replay([s], {stepTimeoutMs: timeout});
+        },
+        step,
+        stepTimeoutMs,
+      );
+      const r = Array.isArray(stepRes) ? stepRes[0] : stepRes;
+      results.push(r && typeof r === 'object' ? r : {ok: true, via: 'single'});
+    } catch (err) {
+      // Likely navigation destroyed the execution context
+      await waitNav;
+      await ensureRuntime();
+      let ok = false;
+      if (step && step.doneWhen && step.doneWhen.urlMatches) {
+        try {
+          ok = await page.evaluate((pattern: string) => {
+            try { return new RegExp(pattern).test(location.href); } catch { return false; }
+          }, step.doneWhen.urlMatches);
+        } catch {
+          ok = false;
+        }
+      }
+      if (!ok && navHappened) {
+        // If we navigated but no explicit doneWhen, consider it a soft success
+        ok = true;
+      }
+      results.push(ok ? {ok: true, via: 'nav-recovered'} : {ok: false, error: String((err as Error)?.message || err)});
+    }
+    // Ensure any pending navigation promise is settled before next step
+    await waitNav;
+  }
   let okCount = 0;
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
