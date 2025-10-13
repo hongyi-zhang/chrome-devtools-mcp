@@ -86,6 +86,18 @@ async function readNdjson(file: string): Promise<any[]> {
     .map(l => JSON.parse(l));
 }
 
+function selectorFingerprint(sel: any, primary: ReplayStep['selectors']): string {
+  const outer = sel?.outerHTMLHash ? String(sel.outerHTMLHash) : '';
+  if (outer) return `outer:${outer}`;
+  const css = primary.css ? `css:${primary.css}` : '';
+  const xp = primary.xpath ? `xp:${primary.xpath}` : '';
+  const aria = primary.aria ? `aria:${primary.aria.role||''}|${primary.aria.name||''}` : '';
+  const shadow = Array.isArray(primary.shadowPiercePath) && primary.shadowPiercePath.length ? `shadow:${primary.shadowPiercePath.join('>')}` : '';
+  const cssfb = Array.isArray(primary.cssFallbacks) && primary.cssFallbacks.length ? `fb:${primary.cssFallbacks.join('|')}` : '';
+  const key = [css, cssfb, xp, aria, shadow].filter(Boolean).join('|');
+  return key || 'unknown';
+}
+
 function scoreSelectorBundle(sel: any): {primary: ReplayStep['selectors']; confidence: number} {
   let confidence = 0.5;
   const primary: ReplayStep['selectors'] = {};
@@ -166,10 +178,18 @@ function toReplay(records: any[], limit?: number): ReplayPlan {
       };
     }
   }
+  const seen = new Set<string>();
   for (const rec of stepsIn) {
     const kind = rec.action?.name;
     if (!kind) continue;
     const {primary, confidence} = scoreSelectorBundle(rec.selector);
+    // Build a signature to deduplicate identical actions
+    const fp = selectorFingerprint(rec.selector, primary);
+    const sig = [kind, fp, rec.action?.params?.value ?? '', (rec.framePath||[]).join('>')].join('@@');
+    if (seen.has(sig)) {
+      continue; // skip duplicate action
+    }
+    seen.add(sig);
     const step: ReplayStep = {
       kind,
       selectors: primary,
