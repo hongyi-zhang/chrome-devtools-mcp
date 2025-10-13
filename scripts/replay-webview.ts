@@ -91,8 +91,10 @@ async function main() {
   });
   const replayJsPath = path.resolve('webview/replay.js');
   const runtime = await fs.readFile(replayJsPath, 'utf-8');
-  // Ensure the runtime is injected on every navigation
-  await page.addInitScript({content: runtime});
+  // Ensure the runtime is injected on every new document (Puppeteer API)
+  await page.evaluateOnNewDocument((src: string) => {
+    try { (0, eval)(src); } catch {}
+  }, runtime);
   // Navigate to start URL, then inject for the current document
   await page.goto(startUrl, {waitUntil: 'domcontentloaded'});
   await page.addScriptTag({content: runtime});
