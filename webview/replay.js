@@ -54,6 +54,20 @@
     }
     return null;
   }
+  function resolveWithAlternatives(step){
+    var tried = 0;
+    var el = resolveSelectorBundle(step.selectors||{});
+    tried++;
+    if (el) return {el: el, via: 'primary', tried: tried};
+    var alts = step.alternatives||[];
+    for (var i=0;i<alts.length;i++){
+      var alt = alts[i];
+      var elAlt = resolveSelectorBundle(alt.selectors||{});
+      tried++;
+      if (elAlt) return {el: elAlt, via: 'alternative', reason: alt.reason||'', tried: tried};
+    }
+    return {el: null, via: 'none', tried: tried};
+  }
   function scrollIntoViewCentered(el){ try { el.scrollIntoView({block:'center', inline:'center'}); } catch(e){} }
   function act(step, el){
     if (step.kind === 'click'){
@@ -118,18 +132,19 @@
     function next(){
       if (i >= steps.length) return Promise.resolve(results);
       var step = steps[i++];
-      var el = resolveSelectorBundleWithFrames(step.selectors||{});
+      var resolved = resolveWithAlternatives(step);
+      var el = resolved.el;
       if (!el) {
-        results.push({ok:false, error:'Element not found'});
+        results.push({ok:false, error:'Element not found', triedSelectors: resolved.tried});
         return Promise.resolve(results);
       }
       return act(step, el).then(function(){
         return waitFor(step.doneWhen, stepTimeoutMs);
       }).then(function(){
-        results.push({ok:true});
+        results.push({ok:true, via: resolved.via, alternativeReason: resolved.reason||null});
         return next();
       }, function(err){
-        results.push({ok:false, error:String(err&&err.message||err)});
+        results.push({ok:false, error:String(err&&err.message||err), via: resolved.via, alternativeReason: resolved.reason||null});
         return next();
       });
     }

@@ -25,12 +25,25 @@ interface ReplayStep {
   };
   notes?: string;
   confidence?: number;
+  // Hints to help replay engines diagnose instability and try fallbacks.
+  stabilityHints?: {
+    idLooksDynamic?: boolean;
+    hasXPath?: boolean;
+    usesAria?: boolean;
+    shadowPiercing?: boolean;
+  };
+  // Optional alternative selector bundles to try on failure (in order)
+  alternatives?: Array<{
+    selectors: ReplayStep['selectors'];
+    reason?: string;
+  }>;
 }
 
 interface ReplayPlan {
   version: 'v1';
   userAgent?: string;
   viewport?: {width: number; height: number; deviceScaleFactor?: number};
+  startUrl?: string;
   steps: ReplayStep[];
 }
 
@@ -71,13 +84,20 @@ function scoreSelectorBundle(sel: any): {primary: ReplayStep['selectors']; confi
     if (/data-(test|qa|e2e)/i.test(sel.css)) confidence = 0.95;
     else if (/^#[-a-zA-Z0-9_]+$/.test(sel.css)) confidence = 0.9;
   }
-  if (!primary.css && sel?.cssFallbacks?.length) {
-    primary.css = sel.cssFallbacks[0];
-    confidence = 0.6;
+  if (sel?.cssFallbacks?.length) {
+    const fallbacks = Array.from(new Set(sel.cssFallbacks as string[])).filter(
+      (s): s is string => typeof s === 'string' && s.length > 0,
+    );
+    primary.cssFallbacks = fallbacks;
+    // If we didn't have a primary css, try the first fallback as primary.
+    if (!primary.css && fallbacks.length) {
+      primary.css = fallbacks[0];
+      confidence = Math.max(confidence, 0.6);
+    }
   }
   if (!primary.css && sel?.xpath) {
     primary.xpath = sel.xpath;
-    confidence = 0.4;
+    confidence = Math.max(confidence, 0.4);
   }
   if (sel?.aria) {
     primary.aria = sel.aria;
@@ -117,6 +137,24 @@ function toReplay(records: any[], limit?: number): ReplayPlan {
   }
   const stepsIn = chosen.slice(0, limit ?? chosen.length);
   const out: ReplayPlan = {version: 'v1', steps: []};
+  // Compute a best-effort starting URL from the earliest page URL in this session.
+  for (const r of stepsIn) {
+    if (r?.page?.url && !out.startUrl) {
+      out.startUrl = r.page.url;
+      break;
+    }
+  }
+  // Attempt to carry through user agent and viewport if present on any record (best-effort; optional)
+  for (const r of stepsIn) {
+    if (!out.userAgent && r?.env?.userAgent) out.userAgent = r.env.userAgent;
+    if (!out.viewport && r?.env?.viewport?.width && r?.env?.viewport?.height) {
+      out.viewport = {
+        width: Number(r.env.viewport.width) || 0,
+        height: Number(r.env.viewport.height) || 0,
+        deviceScaleFactor: r.env.viewport.deviceScaleFactor,
+      };
+    }
+  }
   for (const rec of stepsIn) {
     const kind = rec.action?.name;
     if (!kind) continue;
@@ -128,10 +166,44 @@ function toReplay(records: any[], limit?: number): ReplayPlan {
       framePath: rec.framePath ?? [],
       confidence,
     };
-    // Simple doneWhen: if click leads to navigation, use urlMatches
-    if (kind === 'click' && rec.page?.url) {
-      step.doneWhen = {urlMatches: String(new URL(rec.page.url).origin).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')};
+    // Stability hints
+    step.stabilityHints = {
+      idLooksDynamic: Boolean(primary.css && /[#.][a-zA-Z]+-\d{3,}/.test(primary.css)),
+      hasXPath: Boolean(primary.xpath),
+      usesAria: Boolean(primary.aria),
+      shadowPiercing: Boolean(primary.shadowPiercePath && primary.shadowPiercePath.length),
+    };
+    // Alternatives: keep xpath/aria as potential fallbacks when not used as primary
+    const alternatives: ReplayStep['alternatives'] = [];
+    if (rec.selector?.xpath) alternatives.push({selectors: {xpath: rec.selector.xpath}, reason: 'xpath fallback'});
+    if (rec.selector?.aria) alternatives.push({selectors: {aria: rec.selector.aria}, reason: 'aria fallback'});
+    if (rec.selector?.cssFallbacks?.length) {
+      for (const css of rec.selector.cssFallbacks) {
+        if (css && css !== primary.css) alternatives.push({selectors: {css}, reason: 'css fallback'});
+      }
     }
+    if (alternatives.length) step.alternatives = alternatives;
+    // doneWhen heuristics based on network signals and page URL
+    const doneWhen: ReplayStep['doneWhen'] = {};
+    const net: any[] = Array.isArray(rec.network) ? rec.network : [];
+    const urls = net.map(n => String(n?.url || '')).filter(Boolean);
+    const checkoutUrl = urls.find(u => /\/checkout\b/i.test(u) || /stripe|payment|upe|express-checkout/i.test(u));
+    const cartUrl = urls.find(u => /\/cart\b/i.test(u));
+    if (checkoutUrl) {
+      // prefer matching on path fragment so it works across environments
+      doneWhen.urlMatches = 'checkout';
+      step.notes = step.notes ? step.notes + '; checkout' : 'checkout';
+    } else if (cartUrl) {
+      doneWhen.urlMatches = 'cart';
+      step.notes = step.notes ? step.notes + '; cart' : 'cart';
+    } else if (rec.page?.url) {
+      // Fallback: use origin of the current page to detect any navigation
+      try {
+        const origin = new URL(rec.page.url).origin;
+        doneWhen.urlMatches = origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      } catch {}
+    }
+    if (Object.keys(doneWhen).length) step.doneWhen = doneWhen;
     out.steps.push(step);
   }
   return out;

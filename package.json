@@ -22,6 +22,9 @@
     "prepare": "node --experimental-strip-types scripts/prepare.ts",
     "sync-server-json-version": "node  --experimental-strip-types scripts/sync-server-json-version.ts && npm run format",
     "trace:post": "node --experimental-strip-types scripts/postprocess-trace.ts --in ./.mcp-traces/latest.ndjson --out ./examples/replay-out.json",
+    "replay:webview": "node --experimental-strip-types scripts/replay-webview.ts --plan ./examples/replay-out.json",
+    "replay:webview:ritual": "node --experimental-strip-types scripts/replay-webview.ts --plan ./examples/replay-out.json --url https://ritualcoffee.com/shop/coffee/cosmic-shift-seasonal-espresso/",
+    "replay:latest": "npm run trace:post && npm run replay:webview",
     "e2e:llm": "node --experimental-strip-types scripts/e2e-llm.ts"
   },
   "files": [
