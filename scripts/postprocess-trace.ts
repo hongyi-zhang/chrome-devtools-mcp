@@ -18,6 +18,17 @@ interface ReplayStep {
   };
   value?: string;
   framePath?: string[];
+  // Additional metadata to disambiguate elements at replay time
+  meta?: {
+    tag?: string;
+    type?: string;
+    nameAttr?: string | null;
+    idAttr?: string | null;
+    classList?: string[];
+    textSample?: string;
+    outerHTMLHash?: string;
+    bbox?: {x: number; y: number; width: number; height: number};
+  };
   doneWhen?: {
     selectorVisible?: string;
     urlMatches?: string;
@@ -165,6 +176,17 @@ function toReplay(records: any[], limit?: number): ReplayPlan {
       value: rec.action?.params?.value,
       framePath: rec.framePath ?? [],
       confidence,
+    };
+    // Attach disambiguation metadata for the resolver
+    step.meta = {
+      tag: rec.selector?.tag,
+      type: rec.selector?.type,
+      nameAttr: rec.selector?.nameAttr ?? null,
+      idAttr: rec.selector?.idAttr ?? null,
+      classList: Array.isArray(rec.selector?.classList) ? rec.selector.classList : undefined,
+      textSample: rec.selector?.textSample,
+      outerHTMLHash: rec.selector?.outerHTMLHash,
+      bbox: rec.bbox || rec.selector?.bbox,
     };
     // Stability hints
     step.stabilityHints = {

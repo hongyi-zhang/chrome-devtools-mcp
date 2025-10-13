@@ -150,8 +150,60 @@ async function computeCss(el: ElementHandle<Element>): Promise<{css?: string; fa
     candidates.push(`${attrs.tag}:nth-of-type(${attrs.indexAmongType + 1})`);
   }
 
-  const uniq = Array.from(new Set(candidates.filter(Boolean)));
-  return {css: uniq[0], fallbacks: uniq.slice(1, 4)};
+  // Build anchored candidates from stable ancestors and rank by uniqueness
+  const ancestorAnchors: string[] = await el.evaluate(e => {
+    function esc(v: string): string { return v.replace(/"/g, '\\"'); }
+    const anchors: string[] = [];
+    let cur: Element | null = e.parentElement;
+    let depth = 0;
+    while (cur && depth < 5) {
+      const tag = cur.tagName.toLowerCase();
+      const id = cur.getAttribute('id');
+      if (id && id.length < 80) anchors.push(`#${esc(id)}`);
+      const names = Array.from(cur.getAttributeNames());
+      for (const n of names) {
+        if (n.startsWith('data-') && /(test|qa|qatest|e2e)/i.test(n)) {
+          const v = cur.getAttribute(n) || '';
+          anchors.push(`${tag}[${n}="${esc(v)}"]`);
+          break;
+        }
+      }
+      cur = cur.parentElement;
+      depth++;
+    }
+    return anchors;
+  });
+
+  const chain: string[] = [];
+  for (const k of ['name', 'type', 'aria-label', 'role']) {
+    const v = (attrs as any).attrs[k as keyof typeof attrs.attrs as any];
+    if (v) chain.push(`[${k}="${cssEscape(String(v))}"]`);
+  }
+  const nodeDesc = chain.length ? `${attrs.tag}${chain.join('')}` : `${attrs.tag}`;
+  const anchored = ancestorAnchors.map(a => `${a} ${nodeDesc}`);
+  const allCandidates = Array.from(new Set([...candidates, ...anchored].filter(Boolean)));
+
+  type CountPair = {sel: string; count: number; len: number};
+  const counts: CountPair[] = await el.evaluate((e, sels: string[]) => {
+    const doc = (e.ownerDocument || document) as Document;
+    const out: {sel: string; count: number; len: number}[] = [];
+    for (var i = 0; i < sels.length; i++) {
+      var s = sels[i];
+      var n = 0;
+      try { n = doc.querySelectorAll(s).length; } catch (_) { n = 0; }
+      out.push({sel: s, count: n, len: s.length});
+    }
+    return out;
+  }, allCandidates);
+
+  counts.sort((a, b) => {
+    if ((a.count === 1) !== (b.count === 1)) return a.count === 1 ? -1 : 1;
+    if (a.count !== b.count) return a.count - b.count;
+    return a.len - b.len;
+  });
+  const chosen = counts.find(c => c.count >= 1)?.sel;
+  const fallbacks = counts.filter(c => c.sel !== chosen).slice(0, 4).map(c => c.sel);
+  return {css: chosen, fallbacks};
 }
 
 function cssEscape(value: string): string {
@@ -186,7 +238,7 @@ async function computeXPath(el: ElementHandle<Element>): Promise<{xpath?: string
       while (c) {
         const name = c.tagName.toLowerCase();
         const parentEl: Element | null = c.parentElement;
-        if (!parent) {
+        if (!parentEl) {
           a.unshift(`/${name}`);
           break;
         }

@@ -94,8 +94,7 @@ function ensureTracingEnvAndDir(): string {
   }
   let dir = process.env['MCP_TRACE_DIR'];
   if (!dir) {
-    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    dir = path.join(process.cwd(), `.mcp-traces-${suffix}`);
+    dir = path.join(process.cwd(), `.mcp-traces`);
     process.env['MCP_TRACE_DIR'] = dir;
   }
   return dir;
