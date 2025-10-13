@@ -174,11 +174,6 @@ async function computeCss(el: ElementHandle<Element>): Promise<{css?: string; fa
     return anchors;
   });
 
-  const chain: string[] = [];
-  for (const k of ['name', 'type', 'aria-label', 'role']) {
-    const v = (attrs as any).attrs[k as keyof typeof attrs.attrs as any];
-    if (v) chain.push(`[${k}="${cssEscape(String(v))}"]`);
-  }
   const nodeDesc = chain.length ? `${attrs.tag}${chain.join('')}` : `${attrs.tag}`;
   const anchored = ancestorAnchors.map(a => `${a} ${nodeDesc}`);
   const allCandidates = Array.from(new Set([...candidates, ...anchored].filter(Boolean)));
