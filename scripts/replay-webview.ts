@@ -43,6 +43,7 @@ interface Args {
   headless?: boolean;
   slowMo?: number;
   devtools?: boolean;
+  screenshot?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -56,6 +57,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--headless') out.headless = true;
     else if (a === '--slowMo') out.slowMo = Number(argv[++i]);
     else if (a === '--devtools') out.devtools = true;
+    else if (a === '--screenshot') out.screenshot = argv[++i];
   }
   return out;
 }
@@ -63,7 +65,7 @@ function parseArgs(argv: string[]): Args {
 async function main() {
   const args = parseArgs(process.argv);
   if (!args.plan) {
-    console.error('Usage: node --experimental-strip-types scripts/replay-webview.ts --plan <replay.json> [--url <start>] [--timeout 8000] [--headful] [--slowMo 50] [--devtools]');
+    console.error('Usage: node --experimental-strip-types scripts/replay-webview.ts --plan <replay.json> [--url <start>] [--timeout 8000] [--headful] [--slowMo 50] [--devtools] [--screenshot <path>]');
     process.exit(1);
   }
   const planPath = path.resolve(args.plan);
@@ -170,6 +172,18 @@ async function main() {
   }
   // eslint-disable-next-line no-console
   console.log(`Summary: ${okCount}/${results.length} steps succeeded.`);
+  // Take a final screenshot for inspection before closing
+  try {
+    const targetPath = args.screenshot ? path.resolve(args.screenshot) : path.resolve('examples/replay-final.png');
+    try { await fs.mkdir(path.dirname(targetPath), {recursive: true}); } catch {}
+    const outPath = /\.(png|jpe?g|webp)$/i.test(targetPath) ? targetPath : targetPath + '.png';
+    await page.screenshot({path: outPath as `${string}.png`, fullPage: true});
+    // eslint-disable-next-line no-console
+    console.log(`Saved screenshot: ${targetPath}`);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.log('Failed to save screenshot:', (e as Error)?.message || e);
+  }
   await browser.close();
   if (okCount !== results.length) process.exit(2);
 }
