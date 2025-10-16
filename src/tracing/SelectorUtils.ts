@@ -89,6 +89,24 @@ function looksDynamicId(id: string | null): boolean {
   return /[0-9a-fA-F-]{6,}/.test(id) || /\d{4,}/.test(id);
 }
 
+function looksDynamicClass(cls: string): boolean {
+  // Matches common patterns for generated CSS classes
+  return (
+    /^[a-zA-Z_]+-[a-zA-Z0-9_]+$/.test(cls) || // e.g., styled-component-hYdsFD
+    /^[a-zA-Z_]+_[a-zA-Z0-9_]+$/.test(cls) || // e.g., css-1q2w3e
+    /^[a-zA-Z]{1,2}[0-9a-f]{5,}/.test(cls) // e.g., cx-a1b2c3d4
+  );
+}
+
+function looksDynamicToken(val: string): boolean {
+  if (!val) return true;
+  if (val.length > 80) return true;
+  // UUID/hex-like, base64-like, random hashes
+  if (/[0-9a-fA-F-]{10,}/.test(val)) return true;
+  if (/[A-Za-z0-9+/]{20,}={0,2}/.test(val)) return true;
+  return false;
+}
+
 async function computeAria(el: ElementHandle<Element>): Promise<{role?: string; name?: string} | undefined> {
   try {
     const role = await el.evaluate(e => e.getAttribute('role') || undefined);
@@ -123,19 +141,32 @@ async function computeCss(el: ElementHandle<Element>): Promise<{css?: string; fa
     const indexAmongType = parent
       ? Array.from(parent.children).filter(c => c.tagName === e.tagName).indexOf(e)
       : -1;
-    return {attrs, tag: e.tagName.toLowerCase(), indexAmongType};
+    return {attrs, tag: e.tagName.toLowerCase(), indexAmongType, classList: Array.from(e.classList)};
   });
 
   const candidates: string[] = [];
-  // data-* test ids
+  // data-* test ids and other stable data-* attributes
   for (const key of Object.keys(attrs.attrs)) {
-    if (key.startsWith('data-') && /(test|qa|qatest|e2e)/i.test(key)) {
-      candidates.push(`${attrs.tag}[${key}="${cssEscape(attrs.attrs[key])}"]`);
+    const value = attrs.attrs[key];
+    if (key.startsWith('data-')) {
+      if (/(test|qa|qatest|e2e)/i.test(key)) {
+        candidates.push(`${attrs.tag}[${key}="${cssEscape(value)}"]`);
+      } else {
+        // Include stable-looking data-* anchors (e.g., data-product-id)
+        const isStable = value && value.length <= 64 && !(/[0-9a-fA-F-]{10,}/.test(value)) && !(/[A-Za-z0-9+/]{20,}={0,2}/.test(value));
+        if (isStable) candidates.push(`${attrs.tag}[${key}="${cssEscape(value)}"]`);
+      }
     }
   }
   // stable id
   const id = attrs.attrs['id'];
   if (id && !looksDynamicId(id)) candidates.push(`#${cssEscape(id)}`);
+
+  // class-based selectors
+  const stableClasses = attrs.classList.filter(c => !looksDynamicClass(c));
+  if (stableClasses.length > 0) {
+    candidates.push(`${attrs.tag}.${stableClasses.map(c => cssEscape(c)).join('.')}`);
+  }
 
   // attribute chain
   const chain: string[] = [];
@@ -152,20 +183,28 @@ async function computeCss(el: ElementHandle<Element>): Promise<{css?: string; fa
 
   // Build anchored candidates from stable ancestors and rank by uniqueness
   const ancestorAnchors: string[] = await el.evaluate(e => {
-    function esc(v: string): string { return v.replace(/"/g, '\\"'); }
+    function esc(v: string): string { return v.replace(/"/g, '\"'); }
     const anchors: string[] = [];
     let cur: Element | null = e.parentElement;
     let depth = 0;
-    while (cur && depth < 5) {
+    while (cur && depth < 6) {
       const tag = cur.tagName.toLowerCase();
       const id = cur.getAttribute('id');
       if (id && id.length < 80) anchors.push(`#${esc(id)}`);
+      // Stable classes
+      const stableClasses = Array.from(cur.classList).filter(c => !/^[a-zA-Z_]+-[a-zA-Z0-9_]+$/.test(c) && !/^[a-zA-Z_]+_[a-zA-Z0-9_]+$/.test(c) && !/^[a-zA-Z]{1,2}[0-9a-f]{5,}/.test(c));
+      if (stableClasses.length > 0) anchors.push(`${tag}.${stableClasses.join('.')}`);
+      // Stable data-* attributes (not only test ids)
       const names = Array.from(cur.getAttributeNames());
+      let pushed = 0;
       for (const n of names) {
-        if (n.startsWith('data-') && /(test|qa|qatest|e2e)/i.test(n)) {
-          const v = cur.getAttribute(n) || '';
+        if (!n.startsWith('data-')) continue;
+        const v = cur.getAttribute(n) || '';
+        const isStable = v && v.length <= 64 && !(/[0-9a-fA-F-]{10,}/.test(v)) && !(/[A-Za-z0-9+/]{20,}={0,2}/.test(v));
+        if (isStable) {
           anchors.push(`${tag}[${n}="${esc(v)}"]`);
-          break;
+          pushed++;
+          if (pushed >= 2) break; // limit explosion
         }
       }
       cur = cur.parentElement;
@@ -174,19 +213,35 @@ async function computeCss(el: ElementHandle<Element>): Promise<{css?: string; fa
     return anchors;
   });
 
-  const nodeDesc = chain.length ? `${attrs.tag}${chain.join('')}` : `${attrs.tag}`;
-  const anchored = ancestorAnchors.map(a => `${a} ${nodeDesc}`);
+  const classDesc = stableClasses.length ? `${attrs.tag}.${stableClasses.map(c => cssEscape(c)).join('.')}` : '';
+  const attrDesc = chain.length ? `${attrs.tag}${chain.join('')}` : '';
+  const baseDesc = `${attrs.tag}`;
+  const nodeDescs = [attrDesc, classDesc, baseDesc].filter(Boolean);
+  const anchored: string[] = [];
+  for (const a of ancestorAnchors) {
+    for (const d of nodeDescs) anchored.push(`${a} ${d}`);
+  }
   const allCandidates = Array.from(new Set([...candidates, ...anchored].filter(Boolean)));
 
-  type CountPair = {sel: string; count: number; len: number};
+  type CountPair = {sel: string; count: number; len: number, score: number};
   const counts: CountPair[] = await el.evaluate((e, sels: string[]) => {
+    const root = e.getRootNode() as Document | ShadowRoot;
     const doc = (e.ownerDocument || document) as Document;
-    const out: {sel: string; count: number; len: number}[] = [];
+    const out: {sel: string; count: number; len: number, score: number}[] = [];
     for (var i = 0; i < sels.length; i++) {
       var s = sels[i];
       var n = 0;
-      try { n = doc.querySelectorAll(s).length; } catch (_) { n = 0; }
-      out.push({sel: s, count: n, len: s.length});
+      try {
+        // Query within shadow root if present, else within document
+        const scope: any = (root instanceof ShadowRoot) ? root : doc;
+        n = scope.querySelectorAll(s).length;
+      } catch (_) { n = 0; }
+      let score = 0;
+      if (s.includes('[data-')) score += 10;
+      if (s.includes('#')) score += 8;
+      if (s.includes('.')) score += 5;
+      if (s.includes(':nth-of-type')) score -= 5;
+      out.push({sel: s, count: n, len: s.length, score});
     }
     return out;
   }, allCandidates);
@@ -194,10 +249,11 @@ async function computeCss(el: ElementHandle<Element>): Promise<{css?: string; fa
   counts.sort((a, b) => {
     if ((a.count === 1) !== (b.count === 1)) return a.count === 1 ? -1 : 1;
     if (a.count !== b.count) return a.count - b.count;
+    if (b.score !== a.score) return b.score - a.score;
     return a.len - b.len;
   });
-  const chosen = counts.find(c => c.count >= 1)?.sel;
-  const fallbacks = counts.filter(c => c.sel !== chosen).slice(0, 4).map(c => c.sel);
+  const chosen = counts.find(c => c.count === 1)?.sel;
+  const fallbacks = counts.filter(c => c.sel !== chosen && c.count === 1).slice(0, 4).map(c => c.sel);
   return {css: chosen, fallbacks};
 }
 
@@ -281,6 +337,56 @@ async function computeShadowPath(el: ElementHandle<Element>): Promise<string[] |
   }
 }
 
+async function pruneNonUniqueSelectors(el: ElementHandle<Element>, bundle: SelectorBundle): Promise<SelectorBundle> {
+  try {
+    const pruned = await el.evaluate((e, b: SelectorBundle) => {
+      const doc = (e.ownerDocument || document) as Document;
+      const out: SelectorBundle = {...b};
+
+      function isUniqueCss(sel: string): boolean {
+        try {
+          const list = doc.querySelectorAll(sel);
+          return list.length === 1 && list[0] === e;
+        } catch {
+          return false;
+        }
+      }
+
+      if (out.css && !isUniqueCss(out.css)) delete out.css;
+      if (out.cssFallbacks && out.cssFallbacks.length) {
+        out.cssFallbacks = out.cssFallbacks.filter(s => isUniqueCss(s));
+        if (out.css) out.cssFallbacks = out.cssFallbacks.filter(s => s !== out.css);
+        if (!out.cssFallbacks.length) delete out.cssFallbacks;
+      }
+
+      function isUniqueXPath(xpath: string): boolean {
+        try {
+          const res = doc.evaluate(xpath, doc, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          return res.snapshotLength === 1 && res.snapshotItem(0) === e;
+        } catch {
+          return false;
+        }
+      }
+
+      if (out.xpath && !isUniqueXPath(out.xpath)) delete out.xpath;
+      if (out.xpathAbs && !isUniqueXPath(out.xpathAbs)) delete out.xpathAbs;
+
+      if (out.aria && out.aria.role) {
+        const role = out.aria.role;
+        const name = out.aria.name;
+        let candidates = Array.from(doc.querySelectorAll(`[role="${role}"]`));
+        candidates = candidates.filter(c => !name || ((c.textContent || '').indexOf(name) !== -1));
+        if (!(candidates.length === 1 && candidates[0] === e)) delete out.aria;
+      }
+
+      return out;
+    }, bundle);
+    return pruned;
+  } catch {
+    return bundle;
+  }
+}
+
 export async function buildSelectorBundle(
   el: ElementHandle<Element>,
   page: Page,
@@ -299,7 +405,7 @@ export async function buildSelectorBundle(
       computeShadowPath(el),
     ]);
 
-  return {
+  const initial: SelectorBundle = {
     css: css.css,
     cssFallbacks: css.fallbacks,
     xpath: xp.xpath,
@@ -316,6 +422,9 @@ export async function buildSelectorBundle(
     outerHTMLHash,
     framePath,
   } as SelectorBundle;
+
+  const validated = await pruneNonUniqueSelectors(el, initial);
+  return validated;
 }
 
 

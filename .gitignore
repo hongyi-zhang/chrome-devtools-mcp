@@ -148,4 +148,4 @@ log.txt
 .DS_Store
 
 .mcp-traces
-examples/replay-out.json
+extension/data

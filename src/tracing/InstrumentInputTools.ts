@@ -33,6 +33,8 @@ export function withActionTracing<Schema extends z.ZodRawShape>(
       const page = context.getSelectedPage();
       const actionName = tool.name;
       const timeStart = Date.now();
+      // Snapshot the page URL BEFORE running the action to avoid capturing post-navigation endpoints
+      const pageUrlBefore = page.url();
       let element: ElementHandle<Element> | null = null;
       let selectorBundle = undefined;
       let bbox = undefined;
@@ -85,7 +87,8 @@ export function withActionTracing<Schema extends z.ZodRawShape>(
             timeStart,
             timeEnd,
             action: {name: actionName, params: (request as any).params},
-            page: {url: page.url(), title},
+            // Use the pre-action URL so the earliest record reflects the initial page
+            page: {url: pageUrlBefore, title},
             framePath: selectorBundle?.framePath ?? [],
             selector: selectorBundle ?? {
               outerHTMLHash: '',

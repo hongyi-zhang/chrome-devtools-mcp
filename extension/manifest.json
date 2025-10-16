@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Trace Replay",
+  "version": "1.0",
+  "description": "Replay a recorded trace.",
+  "permissions": ["activeTab", "scripting"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["replay.js", "data/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

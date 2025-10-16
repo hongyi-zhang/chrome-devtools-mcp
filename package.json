@@ -25,7 +25,8 @@
     "replay:webview": "node --experimental-strip-types scripts/replay-webview.ts --plan ./examples/replay-out.json",
     "replay:webview:ritual": "node --experimental-strip-types scripts/replay-webview.ts --plan ./examples/replay-out.json --url https://ritualcoffee.com/shop/coffee/cosmic-shift-seasonal-espresso/",
     "replay:latest": "npm run trace:post && npm run replay:webview",
-    "e2e:llm": "node --experimental-strip-types scripts/e2e-llm.ts"
+    "e2e:llm": "node --experimental-strip-types scripts/e2e-llm.ts \"Visit https://www.amazon.com/Neutrogena-Collagen-Vitamin-Treatment-Fragrance/dp/B0F6GBQ54G , and add one item to the cart.\"",
+    "replay:workflow": "node --experimental-strip-types scripts/replay-workflow.ts --prompts ./examples/prompts.json --outDir ./extension/data --mapping ./extension/data/url-trace-mapping.json"
   },
   "files": [
     "build/src",
@@ -74,5 +75,8 @@
   },
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=23"
+  },
+  "prettier": {
+    "singleQuote": true
   }
 }

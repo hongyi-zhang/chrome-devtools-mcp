@@ -118,9 +118,13 @@ function scoreSelectorBundle(sel: any): {primary: ReplayStep['selectors']; confi
       confidence = Math.max(confidence, 0.6);
     }
   }
+  // Prefer short XPath if present; otherwise use absolute XPath when available.
   if (!primary.css && sel?.xpath) {
     primary.xpath = sel.xpath;
     confidence = Math.max(confidence, 0.4);
+  } else if (!primary.css && sel?.xpathAbs) {
+    primary.xpath = sel.xpathAbs;
+    confidence = Math.max(confidence, 0.5);
   }
   if (sel?.aria) {
     primary.aria = sel.aria;
@@ -218,6 +222,7 @@ function toReplay(records: any[], limit?: number): ReplayPlan {
     // Alternatives: keep xpath/aria as potential fallbacks when not used as primary
     const alternatives: ReplayStep['alternatives'] = [];
     if (rec.selector?.xpath) alternatives.push({selectors: {xpath: rec.selector.xpath}, reason: 'xpath fallback'});
+    if (rec.selector?.xpathAbs) alternatives.push({selectors: {xpath: rec.selector.xpathAbs}, reason: 'xpathAbs fallback'});
     if (rec.selector?.aria) alternatives.push({selectors: {aria: rec.selector.aria}, reason: 'aria fallback'});
     if (rec.selector?.cssFallbacks?.length) {
       for (const css of rec.selector.cssFallbacks) {

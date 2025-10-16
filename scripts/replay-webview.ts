@@ -98,7 +98,11 @@ async function main() {
     try { (0, eval)(src); } catch {}
   }, runtime);
   // Navigate to start URL, then inject for the current document
-  await page.goto(startUrl, {waitUntil: 'load'});
+  try {
+    await page.goto(startUrl, {waitUntil: 'networkidle2'});
+  } catch {
+    await page.goto(startUrl, {waitUntil: 'load'});
+  }
   await page.addScriptTag({content: runtime});
 
   const stepTimeoutMs = args.stepTimeoutMs ?? 8000;

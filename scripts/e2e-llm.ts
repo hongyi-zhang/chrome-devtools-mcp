@@ -32,8 +32,11 @@ function optionalEnv(name: string): string | undefined {
   return v && v.length ? v : undefined;
 }
 
+// Default mobile viewport for e2e runs; override with E2E_VIEWPORT env like "414x896"
+const DEFAULT_E2E_VIEWPORT: string = optionalEnv('E2E_VIEWPORT') ?? '390x844';
+
 async function listMcpTools(): Promise<Tool[]> {
-  const transport = new StdioClientTransport({command: 'node', args: [MCP_SERVER_PATH, '--isolated']});
+  const transport = new StdioClientTransport({command: 'node', args: [MCP_SERVER_PATH, '--isolated', '--viewport', DEFAULT_E2E_VIEWPORT]});
   const client = new McpClient({name: 'e2e-llm', version: '1.0.0'}, {capabilities: {}});
   await client.connect(transport);
   const {tools} = await client.listTools();
@@ -53,38 +56,36 @@ function convertMcpToolsToOpenAiTools(mcpTools: Tool[]): any[] {
   }));
 }
 
-function formatMcpToolResult(result: any): string {
-  if (!result) {
-    return '';
-  }
-  const content = result.content ?? [];
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const item of content) {
-      if (item && typeof item === 'object') {
-        if (item.type === 'text' && typeof item.text === 'string') {
-          parts.push(item.text);
-        } else {
-          // Fallback for non-text content
-          parts.push(JSON.stringify(item));
-        }
-      } else if (typeof item === 'string') {
-        parts.push(item);
+function processMcpToolResult(result: any): {text: string; images: any[]} {
+  const textParts: string[] = [];
+  const imageParts: any[] = [];
+
+  if (result?.content) {
+    for (const item of result.content) {
+      if (item.type === 'text') {
+        textParts.push(item.text);
+      } else if (item.type === 'image' && item.data) {
+        imageParts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${item.mimeType};base64,${item.data}`,
+          },
+        });
+      } else {
+        textParts.push(JSON.stringify(item));
       }
     }
-    return parts.join('\n');
   }
-  // Fallback for unexpected shapes
-  try {
-    return JSON.stringify(result);
-  } catch {
-    return String(result);
-  }
+
+  return {
+    text: textParts.join('\n'),
+    images: imageParts,
+  };
 }
 
 function buildShoppingSystemPrompt(): string {
   return [
-    'You are a helpful web automation agent. Your goal is to help the user complete a web browsing task. Think before taking actions. Act by calling the provided tools.',
+    'You are a helpful web automation agent. Your goal is to help the user complete a web browsing task. Think before taking actions. Act by calling the provided tools. Only use the input tools (click/fill/hover/drage) to interact with the Web UI, NOT the evaluate_script tool. Wait a few seconds after each action to allow the page to update.',
   ].join('\n');
 }
 
@@ -168,6 +169,10 @@ async function main() {
   const baseURL = requireEnv('OPENAI_BASE_URL');
   const apiVersion = requireEnv('OPENAI_API_VERSION');
   const model = requireEnv('OPENAI_MODEL');
+  const user = process.argv[2];
+  if (!user) {
+    throw new Error('Usage: e2e-llm.ts <user_prompt>');
+  }
 
   const client = new OpenAI({
     apiKey,
@@ -179,15 +184,16 @@ async function main() {
   const mcpTools = await listMcpTools();
   const tools = convertMcpToolsToOpenAiTools(mcpTools);
   const system = buildShoppingSystemPrompt();
-  const user = 'Go to https://ritualcoffee.com/shop/coffee/cosmic-shift-seasonal-espresso/ and add one bag of 5lb coffee to the cart.';
 
   // Create a persistent MCP client for the agent loop
   const traceDir = ensureTracingEnvAndDir();
   const stopTracePrinter = await startTracePrinter(traceDir);
-  const transport = new StdioClientTransport({command: 'node', args: [MCP_SERVER_PATH, '--isolated']});
+  const transport = new StdioClientTransport({command: 'node', args: [MCP_SERVER_PATH, '--isolated', '--viewport', DEFAULT_E2E_VIEWPORT]});
   const mcpClient = new McpClient({name: 'e2e-llm', version: '1.0.0'}, {capabilities: {}});
   await mcpClient.connect(transport);
 
+  let exitCode = 0;
+  let shouldExit = false;
   try {
     const messages: any[] = [
       {role: 'system', content: system},
@@ -244,27 +250,46 @@ async function main() {
           const result = await mcpClient.callTool({
             name,
             arguments: args,
-          } as any);
-          const toolContent = formatMcpToolResult(result);
+          });
+
+          const {text, images} = processMcpToolResult(result);
           messages.push({
             role: 'tool',
             tool_call_id: callId,
-            content: toolContent,
-            name,
-          });
+            content: text,
+          } as any);
+
+          if (images.length > 0) {
+            const lastUserMessage = messages
+              .slice()
+              .reverse()
+              .find(m => m.role === 'user');
+            if (lastUserMessage) {
+              if (!Array.isArray(lastUserMessage.content)) {
+                lastUserMessage.content = [{type: 'text', text: lastUserMessage.content ?? ''}];
+              }
+              lastUserMessage.content.push(...images);
+            }
+          }
         }
-        // Continue loop for next assistant turn after providing tool results
-        continue;
       }
 
-      // If the model indicates stop, end the loop
-      if (finish === 'stop') {
+      if (finish === 'stop' || finish === 'length') {
+        shouldExit = true;
         break;
       }
     }
+  } catch (error) {
+    console.error(error);
+    exitCode = 1;
   } finally {
-    await mcpClient.close();
-    stopTracePrinter();
+    try {
+      await mcpClient.close();
+    } catch {}
+    try {
+      stopTracePrinter();
+    } catch {}
+    process.exit(exitCode);
   }
 }
 
